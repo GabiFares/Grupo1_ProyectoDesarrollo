@@ -5,17 +5,20 @@ import { writeFileSync } from "node:fs";
 import { query } from "../../services/database.js";
 import { QueryResult } from "pg";
 
-const usuarioRoute: FastifyPluginAsync = async (fastify, opts): Promise<void> => {
-  fastify.post('/', {
+const usuarioRoute: FastifyPluginAsync = async (
+  fastify,
+  opts
+): Promise<void> => {
+  fastify.post("/", {
     schema: {
-      tags: ['Usuarios'],
+      tags: ["Usuarios"],
       description: "Crear un usuario",
       body: UsuarioPostSchema,
       response: {
         201: {
-          description: 'El usuario se creó correctamente'
-        }
-      }
+          description: "El usuario se creó correctamente",
+        },
+      },
     },
     handler: async function (request, reply) {
       const postUsuario = request.body as UsuarioPostSchema;
@@ -29,97 +32,144 @@ const usuarioRoute: FastifyPluginAsync = async (fastify, opts): Promise<void> =>
           .send({ error: "Las contraseñas no coinciden" });
       }
 
+      //FIXME: Presenten atención que cualquier try que falle va a salir y dejar datos inconsistentes en la bd
+      //porque hacen los INSERT por partes.
+      //En cada ruta "siempre" un solo try catch si es necesario, y hagan una sola query (si, con todo), con
+      //un BEGIN al principio y un COMMIT al final. Si tienen que hacer dos insert seguidos, usando WITH pueden ir tomando
+      //los valores insertados.
+      //Tengan presente las sentencia INSERT INTO SELECT y UPDATE FROM
+      //En fin, lleven el modelo a clase y vemos desde ahí.
+      //Mas comentarios en el script sql.
+
       if (postUsuario.foto && Object.keys(postUsuario.foto).length > 0) {
         try {
-          const fileBuffer = (postUsuario.foto as Buffer);
-          const fileName = join(process.cwd(), "Resources", postUsuario.email + ".jpg");
+          const fileBuffer = postUsuario.foto as Buffer;
+          const fileName = join(
+            process.cwd(),
+            "Resources",
+            postUsuario.email + ".jpg"
+          );
           writeFileSync(fileName, fileBuffer);
         } catch (error) {
           console.error("Error al intentar crear la imagen:", error);
-          return reply.status(500).send("Hubo un error al intentar crear la imagen");
+          return reply
+            .status(500)
+            .send("Hubo un error al intentar crear la imagen");
         }
       }
 
       try {
         if (postUsuario.apto != null || postUsuario.apto != undefined) {
-          direccionId = await query("INSERT INTO direccion (numero, calle, apto) VALUES ($1, $2, $3) RETURNING id",
-            [postUsuario.numero, postUsuario.calle, postUsuario.apto]);
+          direccionId = await query(
+            "INSERT INTO direccion (numero, calle, apto) VALUES ($1, $2, $3) RETURNING id",
+            [postUsuario.numero, postUsuario.calle, postUsuario.apto]
+          );
         } else {
-          direccionId = await query("INSERT INTO direccion (numero, calle) VALUES ($1, $2) RETURNING id",
-            [postUsuario.numero, postUsuario.calle]);
+          direccionId = await query(
+            "INSERT INTO direccion (numero, calle) VALUES ($1, $2) RETURNING id",
+            [postUsuario.numero, postUsuario.calle]
+          );
         }
       } catch (error) {
         console.error("Error al intentar crear la dirección:", error);
-        return reply.status(500).send("Hubo un error al intentar crear la dirección");
+        return reply
+          .status(500)
+          .send("Hubo un error al intentar crear la dirección");
       }
 
       try {
-        telefonoId = await query("INSERT INTO telefono (numeroTel) VALUES ($1) RETURNING id",
-          [postUsuario.telefono]);
+        telefonoId = await query(
+          "INSERT INTO telefono (numeroTel) VALUES ($1) RETURNING id",
+          [postUsuario.telefono]
+        );
       } catch (error) {
         console.error("Error al intentar crear el teléfono:", error);
-        return reply.status(500).send("Hubo un error al intentar crear el teléfono");
+        return reply
+          .status(500)
+          .send("Hubo un error al intentar crear el teléfono");
       }
 
       try {
-        usuarioId = await query(`INSERT INTO usuario(nombre, apellido, email, contraseña, id_direccion, id_telefono) 
+        usuarioId = await query(
+          `INSERT INTO usuario(nombre, apellido, email, contraseña, id_direccion, id_telefono) 
           VALUES ($1, $2, $3, crypt($4, gen_salt('bf')), $5, $6) RETURNING id`,
-          [postUsuario.nombre, postUsuario.apellido, postUsuario.email, postUsuario.contraseña, direccionId.rows[0].id, telefonoId.rows[0].id]);
+          [
+            postUsuario.nombre,
+            postUsuario.apellido,
+            postUsuario.email,
+            postUsuario.contraseña,
+            direccionId.rows[0].id,
+            telefonoId.rows[0].id,
+          ]
+        );
 
-        await query("UPDATE direccion SET id_usuario = $1 WHERE id = $2", 
-          [usuarioId.rows[0].id, direccionId.rows[0].id]);
+        await query("UPDATE direccion SET id_usuario = $1 WHERE id = $2", [
+          usuarioId.rows[0].id,
+          direccionId.rows[0].id,
+        ]);
 
-        await query("UPDATE telefono SET id_usuario = $1 WHERE id = $2",
-          [usuarioId.rows[0].id, telefonoId.rows[0].id]);
+        await query("UPDATE telefono SET id_usuario = $1 WHERE id = $2", [
+          usuarioId.rows[0].id,
+          telefonoId.rows[0].id,
+        ]);
 
-        await query(`INSERT INTO usuarios_direcciones(usuario_id, direccion_id) VALUES ($1, $2)`,
-          [usuarioId.rows[0].id, direccionId.rows[0].id]);
+        await query(
+          `INSERT INTO usuarios_direcciones(usuario_id, direccion_id) VALUES ($1, $2)`,
+          [usuarioId.rows[0].id, direccionId.rows[0].id]
+        );
 
         return reply.status(201).send("Se creó correctamente el usuario");
       } catch (error) {
         console.error("Error al intentar crear al usuario:", error);
-        return reply.status(500).send("Hubo un error al intentar crear al usuario.");
+        return reply
+          .status(500)
+          .send("Hubo un error al intentar crear al usuario.");
       }
-    }
+    },
   });
 
-  fastify.get('/', {
+  fastify.get("/", {
     schema: {
-      description: 'Obtener un usuario',
-      tags: ['Usuarios'],
+      description: "Obtener un usuario", //FIXME: No estan obteniendo un usuario, sino todos.
+      tags: ["Usuarios"],
       security: [{ BearerAuth: [] }],
+      //FIXME: Estos response así no valen.
+      //De hecho, están retornando todas las columnas, por lo cual están retornando la contraseña, lo que no deberían hacer.
+      //Pueden corregir el esquema de response 200 y/o ajustar ese select. Recuerden que no tienen porque mapear la bd en las rutas. Incluso pueden hacer join o lo que necesiten.
+      //También retornan id_direccion e id_telefono... no se si es correcto o no.
       response: {
-        200: {}
+        200: {},
       },
     },
     onRequest: [fastify.authenticate],
     handler: async function (request, reply) {
       const response = await query("SELECT * from usuario");
       return response.rows[0];
-    }
+    },
   });
 
-  fastify.put('/:id', {
+  fastify.put("/:id", {
     onRequest: [fastify.authenticate],
     schema: {
-      tags: ['Usuarios'],
+      tags: ["Usuarios"],
       description: "Editar un usuario",
       body: UsuarioPostSchema,
       security: [{ BearerAuth: [] }],
       params: {
-        type: 'object',
+        type: "object",
         properties: {
-          id: { type: 'string' }
+          id: { type: "string" },
         },
-        required: ['id']
+        required: ["id"],
       },
       response: {
         200: {
-          description: 'El usuario se editó correctamente'
-        }
-      }
+          description: "El usuario se editó correctamente", //FIXME: Si es un 200 la response tiene que tener contenido.
+        },
+      },
     },
     handler: async function (request, reply) {
+      //FIXME: Un solo try catch
       const postUsuario = request.body as UsuarioPostSchema;
 
       const id = (request.params as { id: string }).id;
@@ -127,9 +177,10 @@ const usuarioRoute: FastifyPluginAsync = async (fastify, opts): Promise<void> =>
       if (id != idt) {
         return reply
           .status(401)
-          .send({ error: "No tiene permisos para hacer esto." });
+          .send({ error: "No tiene permisos para hacer esto." }); //FIXME: Sean más específicos en el mensaje. Este chequeo lo pueden sacar a una función como fastify.authenticate y reutilizarlo al menos en el PUT y el DELETE, capaz también en el GET (si unos usuarios no ven a otros.)
       }
 
+      //FIXME: Esto son validaciones, traten de sacarlo del handler. Usen preHandler. También pueden hacer funciones para reutilizarlas.
       if (postUsuario.contraseña != postUsuario.repetirContraseña) {
         return reply
           .status(400)
@@ -138,46 +189,66 @@ const usuarioRoute: FastifyPluginAsync = async (fastify, opts): Promise<void> =>
 
       try {
         if (postUsuario.foto && Object.keys(postUsuario.foto).length > 0) {
-          const fileBuffer = (postUsuario.foto as Buffer);
-          const fileName = join(process.cwd(), "Resources", postUsuario.email + ".jpg");
+          const fileBuffer = postUsuario.foto as Buffer;
+          const fileName = join(
+            process.cwd(),
+            "Resources",
+            postUsuario.email + ".jpg"
+          );
           writeFileSync(fileName, fileBuffer);
         }
       } catch (error) {
         console.error("Error al intentar crear la imagen:", error);
-        return reply.status(500).send("Hubo un error al intentar crear la imagen");
+        return reply
+          .status(500)
+          .send("Hubo un error al intentar crear la imagen");
       }
 
       if (postUsuario.apto != null || postUsuario.apto != undefined) {
         try {
-          await query("UPDATE direccion set numero = $1 , calle = $2 , apto = $3 WHERE id_usuario = $4",
-            [postUsuario.numero, postUsuario.calle, postUsuario.apto, idt]);
+          await query(
+            "UPDATE direccion set numero = $1 , calle = $2 , apto = $3 WHERE id_usuario = $4",
+            [postUsuario.numero, postUsuario.calle, postUsuario.apto, idt]
+          );
         } catch {
-          return reply.status(500).send("Hubo un error al intentar actualizar la dirección.");
+          return reply
+            .status(500)
+            .send("Hubo un error al intentar actualizar la dirección.");
         }
       } else {
         try {
-          await query("UPDATE direccion set numero = $1 , calle = $2 WHERE id_usuario = $4",
-            [postUsuario.numero, postUsuario.calle, idt]);
+          await query(
+            "UPDATE direccion set numero = $1 , calle = $2 WHERE id_usuario = $4",
+            [postUsuario.numero, postUsuario.calle, idt]
+          );
         } catch {
-          return reply.status(500).send("Hubo un error al intentar actualizar la dirección.");
+          return reply
+            .status(500)
+            .send("Hubo un error al intentar actualizar la dirección.");
         }
       }
 
       try {
-        await query("UPDATE telefono set numeroTel = $1 WHERE id_usuario = $2",
-          [postUsuario.telefono, idt]);
+        await query(
+          "UPDATE telefono set numeroTel = $1 WHERE id_usuario = $2",
+          [postUsuario.telefono, idt]
+        );
       } catch (error) {
-        return reply.status(500).send("Hubo un error al intentar actualizar el teléfono.");
+        return reply
+          .status(500)
+          .send("Hubo un error al intentar actualizar el teléfono.");
       }
 
       try {
-        await query("UPDATE usuario set nombre = $1, email = $2, contraseña = crypt($3, gen_salt('bf')) WHERE id = $4",
-          [postUsuario.nombre, postUsuario.email, postUsuario.contraseña, idt]);
-        return reply.status(201).send("El usuario se editó correctamente");
+        await query(
+          "UPDATE usuario set nombre = $1, email = $2, contraseña = crypt($3, gen_salt('bf')) WHERE id = $4",
+          [postUsuario.nombre, postUsuario.email, postUsuario.contraseña, idt]
+        );
+        return reply.status(201).send("El usuario se editó correctamente"); //FIXME: 201 en un PUT ?
       } catch (error) {
         return reply.status(500).send(error);
       }
-    }
+    },
   });
   fastify.delete("/:id", {
     onRequest: [fastify.authenticate],
@@ -208,9 +279,8 @@ const usuarioRoute: FastifyPluginAsync = async (fastify, opts): Promise<void> =>
         return reply.status(500).send(error);
       }
       return reply.status(204).send();
-    }
+    },
   });
-  
 };
 
 export default usuarioRoute;
