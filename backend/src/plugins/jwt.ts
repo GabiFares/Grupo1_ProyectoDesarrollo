@@ -3,7 +3,7 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
 const jwtOptions: FastifyJWTOptions = {
-  secret: "Proyecto1",
+  secret: "Proyecto1", //FIXME: Deshardcodear esto.
 };
 
 export default fp<FastifyJWTOptions>(async (fastify) => {
